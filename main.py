@@ -184,33 +184,38 @@ def sync_project(jira_key: str, repos: list) -> None:
     log.info("━━━  %s  ━━━", jira_key)
 
     # Repozitáře pro tento projekt (mimo blacklist)
-    project_repos = [
-        r for r in repos
+    bb_slugs = {
+        r["slug"]
+        for r in repos
         if r.get("project", {}).get("key") in
            {k for k, v in BB_TO_JIRA.items() if v == jira_key}
         and r["slug"] not in BLACKLIST
-    ]
+    }
 
-    if not project_repos:
+    if not bb_slugs:
         log.info("  Žádné repozitáře pro tento projekt, přeskakuji.")
         return
 
-    log.info("  BB repozitáře (%d): %s", len(project_repos), [r["slug"] for r in project_repos])
-
-    # Smaž existující komponenty
+    # Existující komponenty v Jiře
     existing = jira_get_components(jira_key)
-    if existing:
-        log.info("  Mažu %d existujících komponent...", len(existing))
-        for comp in existing:
-            jira_delete_component(comp["id"])
-            log.info("    ✖ smazána: %s", comp["name"])
-    else:
-        log.info("  Žádné existující komponenty.")
+    existing_by_name = {c["name"]: c for c in existing}
+    existing_names = set(existing_by_name.keys())
 
-    # Vytvoř nové komponenty
-    log.info("  Vytvářím %d komponent...", len(project_repos))
-    for repo in sorted(project_repos, key=lambda r: r["slug"]):
-        comp = jira_create_component(jira_key, repo["slug"])
+    to_add    = bb_slugs - existing_names       # v BB ale ne v Jiře
+    to_delete = existing_names - bb_slugs       # v Jiře ale ne v BB
+    unchanged = bb_slugs & existing_names       # v obou → nic
+
+    log.info("  BB repozitářů : %d", len(bb_slugs))
+    log.info("  Beze změny    : %d", len(unchanged))
+    log.info("  Přidat        : %d", len(to_add))
+    log.info("  Smazat        : %d", len(to_delete))
+
+    for name in sorted(to_delete):
+        jira_delete_component(existing_by_name[name]["id"])
+        log.info("    ✖ smazána: %s", name)
+
+    for slug in sorted(to_add):
+        comp = jira_create_component(jira_key, slug)
         log.info("    ✔ vytvořena: %s → %s", comp["name"], comp.get("description", ""))
 
 

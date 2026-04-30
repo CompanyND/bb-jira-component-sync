@@ -65,7 +65,7 @@ export SYNC_PROJECT=PRE
 export SYNC_INTERVAL_MIN=60
 export BB_BLACKLIST=pre-e2e-tests,nde-e2e-tests
 
-python jira_bb_sync.py
+python main.py
 ```
 
 ## Struktura repozitáře
