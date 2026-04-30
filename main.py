@@ -260,14 +260,11 @@ def run_sync() -> None:
 
     # Přelož všechny klíče/ID na numerická Jira ID (API funguje spolehlivě s ID)
     resolved = {}
+    log.info("  Překládám projekty: %s", jira_keys)
     for k in jira_keys:
-        try:
-            project_id = jira_resolve_project_id(k)
-            resolved[k] = project_id
-            if project_id != k:
-                log.info("  Přeloženo %s → ID %s", k, project_id)
-        except Exception as e:
-            log.error("  Nelze přeložit projekt %s: %s", k, e)
+        project_id = jira_resolve_project_id(k)
+        resolved[k] = project_id
+        log.info("  Přeloženo %s → ID %s", k, project_id)
     jira_keys = list(resolved.values())
 
     log.info("  Jira projektů : %d\n", len(jira_keys))
