@@ -241,6 +241,26 @@ def run_sync() -> None:
     else:
         jira_keys = [k.strip().upper() for k in SYNC_PROJECT.split(",")]
 
+    # Načti Jira projekty pro překlad ID -> klíč
+    jira_id_to_key = {}
+    for jira_key in jira_keys:
+        try:
+            resp = requests.get(
+                f"{JIRA_API}/project/{jira_key}",
+                auth=jira_auth(),
+                timeout=30,
+            )
+            if resp.ok:
+                data = resp.json()
+                real_key = data.get("key", jira_key)
+                if real_key != jira_key:
+                    log.info("  Přeloženo %s → %s", jira_key, real_key)
+                    jira_id_to_key[jira_key] = real_key
+        except Exception:
+            pass
+    # Nahraď ID za klíče
+    jira_keys = [jira_id_to_key.get(k, k) for k in jira_keys]
+
     log.info("  Jira projektů : %d\n", len(jira_keys))
 
     ok = 0
