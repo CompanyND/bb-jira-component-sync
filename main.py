@@ -61,13 +61,6 @@ BLACKLIST = {
 # Pozn: Jira API v3 na této instanci nereaguje na klíče, pouze na numerická ID.
 # SYNC_PROJECT proto zadávej jako numerické ID (např. 10036 místo PRE).
 # Mapování BB_TO_JIRA používá Jira klíče — JIRA_ID_TO_KEY překládá ID → klíč.
-JIRA_ID_TO_KEY = {
-    "10036": "PRE",
-    # Doplň ostatní projekty až budeš spouštět "all"
-    # "10001": "ABX",
-    # ...
-}
-
 BB_TO_JIRA = {
     "ABX":    "ABX",
     "ADT":    "ADT",
@@ -154,15 +147,21 @@ def jira_auth() -> HTTPBasicAuth:
     return HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN)
 
 
-def jira_resolve_project_id(key_or_id: str) -> str:
-    """Přeloží Jira klíč (PRE) nebo ID (10036) na numerické ID."""
-    resp = requests.get(
-        f"{JIRA_API}/project/{key_or_id}",
-        auth=jira_auth(),
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return str(resp.json()["id"])
+def jira_resolve_projects(keys: list) -> dict:
+    """Přeloží seznam Jira klíčů na {klíč: id} slovník."""
+    result = {}
+    for key in keys:
+        resp = requests.get(
+            f"{JIRA_API}/project/{key}",
+            auth=jira_auth(),
+            timeout=30,
+        )
+        if resp.ok:
+            data = resp.json()
+            result[data["key"]] = str(data["id"])
+        else:
+            log.error("  Nelze načíst projekt %s: %s", key, resp.text[:200])
+    return result
 
 
 def jira_get_components(project_key: str) -> list:
@@ -204,10 +203,9 @@ def jira_create_component(project_id: str, slug: str) -> dict:
 
 # ── Hlavní sync logika ────────────────────────────────────────────────────────
 
-def sync_project(jira_key: str, repos: list) -> None:
+def sync_project(jira_key: str, project_id: str, repos: list) -> None:
     """Synchronizuje komponenty pro jeden Jira projekt."""
-    # Přelož ID na Jira klíč pro BB_TO_JIRA lookup
-    real_jira_key = JIRA_ID_TO_KEY.get(str(jira_key), jira_key)
+    real_jira_key = jira_key  # jira_key je klíč (PRE), project_id je numerické ID
 
     bb_slugs = {
         r["slug"]
@@ -222,7 +220,7 @@ def sync_project(jira_key: str, repos: list) -> None:
         return
 
     # Existující komponenty v Jiře
-    existing = jira_get_components(jira_key)
+    existing = jira_get_components(project_id)
     existing_by_name = {c["name"]: c for c in existing}
     existing_names = set(existing_by_name.keys())
 
@@ -251,39 +249,23 @@ def run_sync() -> None:
 
     # Které Jira projekty synchronizovat
     if SYNC_PROJECT.lower() == "all":
-        jira_keys = list(set(BB_TO_JIRA.values()))
+        jira_keys = sorted(set(BB_TO_JIRA.values()))
     else:
         jira_keys = [k.strip().upper() for k in SYNC_PROJECT.split(",")]
 
-    # Přelož klíče na ID pomocí JIRA_ID_TO_KEY (nebo nech ID jak jsou)
-    # Pro "all" použij všechny hodnoty z BB_TO_JIRA jako klíče
-    if SYNC_PROJECT.lower() == "all":
-        # Pro all potřebujeme ID pro každý Jira klíč — obrátíme JIRA_ID_TO_KEY
-        key_to_id = {v: k for k, v in JIRA_ID_TO_KEY.items()}
-        jira_keys = []
-        for jira_key in set(BB_TO_JIRA.values()):
-            if jira_key in key_to_id:
-                jira_keys.append(key_to_id[jira_key])
-            else:
-                log.warning("  Chybí ID pro Jira klíč %s — přidej ho do JIRA_ID_TO_KEY", jira_key)
-    else:
-        # Pro konkrétní projekt — pokud zadáno jako klíč, přelož na ID
-        key_to_id = {v: k for k, v in JIRA_ID_TO_KEY.items()}
-        jira_keys = []
-        for k in [x.strip() for x in SYNC_PROJECT.split(",")]:
-            if k in JIRA_ID_TO_KEY:
-                jira_keys.append(k)          # už je ID
-            elif k.upper() in key_to_id:
-                jira_keys.append(key_to_id[k.upper()])  # přeložen klíč → ID
-            else:
-                jira_keys.append(k)          # necháme jak je, zkusíme
+    # Načti numerická ID pro všechny klíče (components endpoint potřebuje ID)
+    key_to_id = jira_resolve_projects(jira_keys)
+    missing = [k for k in jira_keys if k not in key_to_id]
+    if missing:
+        log.warning("  Projekty nenalezeny v Jiře: %s", missing)
+    jira_keys = list(key_to_id.keys())
     log.info("  Synchronizuji %d projektů", len(jira_keys))
 
     ok = 0
     errors = 0
     for jira_key in sorted(jira_keys):
         try:
-            sync_project(jira_key, repos)
+            sync_project(jira_key, key_to_id[jira_key], repos)
             ok += 1
         except Exception as e:
             log.error("  CHYBA při synchronizaci %s: %s", jira_key, e)
