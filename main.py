@@ -150,6 +150,8 @@ def jira_get_components(project_key: str) -> list:
         auth=jira_auth(),
         timeout=30,
     )
+    if not resp.ok:
+        log.error("  Jira GET components %s → %d: %s", project_key, resp.status_code, resp.text[:300])
     resp.raise_for_status()
     return resp.json()
 
