@@ -194,7 +194,6 @@ def jira_create_component(project_id: str, slug: str) -> dict:
             "name":        slug,
             "description": f"{BB_REPO_URL}/{slug}/src",
             "project":     project_id,
-            "projectId":   project_id,
         },
         timeout=30,
     )
@@ -244,7 +243,7 @@ def sync_project(jira_key: str, repos: list) -> None:
         log.info("    ✖ smazána: %s", name)
 
     for slug in sorted(to_add):
-        comp = jira_create_component(jira_key, slug)
+        comp = jira_create_component(real_jira_key, slug)
         log.info("    ✔ vytvořena: %s → %s", comp["name"], comp.get("description", ""))
 
 
