@@ -144,6 +144,17 @@ def jira_auth() -> HTTPBasicAuth:
     return HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN)
 
 
+def jira_resolve_project_id(key_or_id: str) -> str:
+    """Přeloží Jira klíč (PRE) nebo ID (10036) na numerické ID."""
+    resp = requests.get(
+        f"{JIRA_API}/project/{key_or_id}",
+        auth=jira_auth(),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return str(resp.json()["id"])
+
+
 def jira_get_components(project_key: str) -> list:
     resp = requests.get(
         f"{JIRA_API}/project/{project_key}/components",
@@ -186,13 +197,19 @@ def sync_project(jira_key: str, repos: list) -> None:
     log.info("━━━  %s  ━━━", jira_key)
 
     # Repozitáře pro tento projekt (mimo blacklist)
+    # jira_key může být numerické ID — načteme klíč z projektu
+    resp = requests.get(f"{JIRA_API}/project/{jira_key}", auth=jira_auth(), timeout=30)
+    resp.raise_for_status()
+    real_jira_key = resp.json()["key"]
+
     bb_slugs = {
         r["slug"]
         for r in repos
         if r.get("project", {}).get("key") in
-           {k for k, v in BB_TO_JIRA.items() if v == jira_key}
+           {k for k, v in BB_TO_JIRA.items() if v == real_jira_key}
         and r["slug"] not in BLACKLIST
     }
+    log.info("  Jira klíč     : %s (ID: %s)", real_jira_key, jira_key)
 
     if not bb_slugs:
         log.info("  Žádné repozitáře pro tento projekt, přeskakuji.")
@@ -241,25 +258,17 @@ def run_sync() -> None:
     else:
         jira_keys = [k.strip().upper() for k in SYNC_PROJECT.split(",")]
 
-    # Načti Jira projekty pro překlad ID -> klíč
-    jira_id_to_key = {}
-    for jira_key in jira_keys:
+    # Přelož všechny klíče/ID na numerická Jira ID (API funguje spolehlivě s ID)
+    resolved = {}
+    for k in jira_keys:
         try:
-            resp = requests.get(
-                f"{JIRA_API}/project/{jira_key}",
-                auth=jira_auth(),
-                timeout=30,
-            )
-            if resp.ok:
-                data = resp.json()
-                real_key = data.get("key", jira_key)
-                if real_key != jira_key:
-                    log.info("  Přeloženo %s → %s", jira_key, real_key)
-                    jira_id_to_key[jira_key] = real_key
-        except Exception:
-            pass
-    # Nahraď ID za klíče
-    jira_keys = [jira_id_to_key.get(k, k) for k in jira_keys]
+            project_id = jira_resolve_project_id(k)
+            resolved[k] = project_id
+            if project_id != k:
+                log.info("  Přeloženo %s → ID %s", k, project_id)
+        except Exception as e:
+            log.error("  Nelze přeložit projekt %s: %s", k, e)
+    jira_keys = list(resolved.values())
 
     log.info("  Jira projektů : %d\n", len(jira_keys))
 
