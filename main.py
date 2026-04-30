@@ -227,6 +227,8 @@ def run_sync() -> None:
     log.info("╚══════════════════════════════════════════════╝")
     log.info("  SYNC_PROJECT  : %s", SYNC_PROJECT)
     log.info("  BB_BLACKLIST  : %s", BLACKLIST or "(prázdný)")
+    log.info("  JIRA_EMAIL    : %s", JIRA_EMAIL)
+    log.info("  JIRA_BASE_URL : %s", JIRA_BASE_URL)
 
     # BB token + repozitáře
     token = bb_get_token()
