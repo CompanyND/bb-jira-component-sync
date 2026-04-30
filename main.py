@@ -58,6 +58,16 @@ BLACKLIST = {
 
 # ── BB projekt → Jira projekt mapování ───────────────────────────────────────
 # BB_Project_Key : Jira_Key
+# Pozn: Jira API v3 na této instanci nereaguje na klíče, pouze na numerická ID.
+# SYNC_PROJECT proto zadávej jako numerické ID (např. 10036 místo PRE).
+# Mapování BB_TO_JIRA používá Jira klíče — JIRA_ID_TO_KEY překládá ID → klíč.
+JIRA_ID_TO_KEY = {
+    "10036": "PRE",
+    # Doplň ostatní projekty až budeš spouštět "all"
+    # "10001": "ABX",
+    # ...
+}
+
 BB_TO_JIRA = {
     "ABX":    "ABX",
     "ADT":    "ADT",
@@ -196,11 +206,9 @@ def sync_project(jira_key: str, repos: list) -> None:
     """Synchronizuje komponenty pro jeden Jira projekt."""
     log.info("━━━  %s  ━━━", jira_key)
 
-    # Repozitáře pro tento projekt (mimo blacklist)
-    # jira_key může být numerické ID — načteme klíč z projektu
-    resp = requests.get(f"{JIRA_API}/project/{jira_key}", auth=jira_auth(), timeout=30)
-    resp.raise_for_status()
-    real_jira_key = resp.json()["key"]
+    # Přelož ID na Jira klíč pro BB_TO_JIRA lookup
+    real_jira_key = JIRA_ID_TO_KEY.get(str(jira_key), jira_key)
+    log.info("  Jira klíč     : %s (ID: %s)", real_jira_key, jira_key)
 
     bb_slugs = {
         r["slug"]
@@ -209,7 +217,6 @@ def sync_project(jira_key: str, repos: list) -> None:
            {k for k, v in BB_TO_JIRA.items() if v == real_jira_key}
         and r["slug"] not in BLACKLIST
     }
-    log.info("  Jira klíč     : %s (ID: %s)", real_jira_key, jira_key)
 
     if not bb_slugs:
         log.info("  Žádné repozitáře pro tento projekt, přeskakuji.")
@@ -258,14 +265,29 @@ def run_sync() -> None:
     else:
         jira_keys = [k.strip().upper() for k in SYNC_PROJECT.split(",")]
 
-    # Přelož všechny klíče/ID na numerická Jira ID (API funguje spolehlivě s ID)
-    resolved = {}
-    log.info("  Překládám projekty: %s", jira_keys)
-    for k in jira_keys:
-        project_id = jira_resolve_project_id(k)
-        resolved[k] = project_id
-        log.info("  Přeloženo %s → ID %s", k, project_id)
-    jira_keys = list(resolved.values())
+    # Přelož klíče na ID pomocí JIRA_ID_TO_KEY (nebo nech ID jak jsou)
+    # Pro "all" použij všechny hodnoty z BB_TO_JIRA jako klíče
+    if SYNC_PROJECT.lower() == "all":
+        # Pro all potřebujeme ID pro každý Jira klíč — obrátíme JIRA_ID_TO_KEY
+        key_to_id = {v: k for k, v in JIRA_ID_TO_KEY.items()}
+        jira_keys = []
+        for jira_key in set(BB_TO_JIRA.values()):
+            if jira_key in key_to_id:
+                jira_keys.append(key_to_id[jira_key])
+            else:
+                log.warning("  Chybí ID pro Jira klíč %s — přidej ho do JIRA_ID_TO_KEY", jira_key)
+    else:
+        # Pro konkrétní projekt — pokud zadáno jako klíč, přelož na ID
+        key_to_id = {v: k for k, v in JIRA_ID_TO_KEY.items()}
+        jira_keys = []
+        for k in [x.strip() for x in SYNC_PROJECT.split(",")]:
+            if k in JIRA_ID_TO_KEY:
+                jira_keys.append(k)          # už je ID
+            elif k.upper() in key_to_id:
+                jira_keys.append(key_to_id[k.upper()])  # přeložen klíč → ID
+            else:
+                jira_keys.append(k)          # necháme jak je, zkusíme
+    log.info("  Jira projekt IDs: %s", jira_keys)
 
     log.info("  Jira projektů : %d\n", len(jira_keys))
 
