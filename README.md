@@ -1,6 +1,6 @@
 # bb-jira-component-sync
 
-Agent běžící na Railway, který synchronizuje Bitbucket repozitáře jako komponenty do Jira projektů. Byte díky tomu ví, do kterého repozitáře patří kód daného Jira tiketu.
+Agent běžící na Railway, který synchronizuje Bitbucket repozitáře jako komponenty do Jira projektů. Tým díky tomu ví, do kterého repozitáře patří kód daného Jira tiketu.
 
 ## Jak to funguje
 
@@ -12,6 +12,14 @@ Agent se pravidelně spouští a pro každý Jira projekt provede diff:
 
 Název komponenty = BB repo slug (např. `preciosacomponents-admin`)  
 Popis komponenty = URL do repozitáře (např. `https://bitbucket.org/netdirect-custom-solution/preciosacomponents-admin/src`)
+
+## Dynamické mapování projektů
+
+Agent **automaticky** načte všechny projekty z Bitbucketu i Jiry a synchronizuje průnik — projekty, které existují v obou systémech se stejným klíčem (např. `PRE` v BB = `PRE` v Jira).
+
+Není potřeba udržovat žádný statický slovník v kódu. Nový projekt stačí vytvořit v BB i Jira se stejným klíčem a agent ho při příštím běhu automaticky zahrne.
+
+Projekty pouze v BB (bez Jira protějšku) a projekty pouze v Jira jsou přeskočeny — agent je vypíše do logu.
 
 ## Railway Variables
 
@@ -26,16 +34,6 @@ Popis komponenty = URL do repozitáře (např. `https://bitbucket.org/netdirect-
 | `SYNC_PROJECT` | Jira klíč nebo `all` | `PRE` nebo `all` |
 | `SYNC_INTERVAL_MIN` | Interval spouštění v minutách | `60` |
 | `BB_BLACKLIST` | Čárkou oddělené repo slugy které se přeskočí | `pre-e2e-tests,nde-e2e-tests` |
-
-## Mapování projektů
-
-BB projekty jsou mapovány na Jira projekty přes `BB_TO_JIRA` v `main.py`.  
-Konvence: BB projekt `CS_Xxx` odpovídá Jira projektu `FC_Xxx`.
-
-Protože Jira API v3 nereaguje na klíče (pouze na numerická ID), je v kódu také `JIRA_ID_TO_KEY` slovník. Při přidávání nového projektu do `all` sync je potřeba doplnit jeho numerické ID — zjistíš ho na:
-```
-https://netdirect.atlassian.net/rest/api/3/project/KLIC_PROJEKTU
-```
 
 ## Blacklist
 

@@ -56,50 +56,6 @@ BLACKLIST = {
     if s.strip()
 }
 
-# ── BB projekt → Jira projekt mapování ───────────────────────────────────────
-# BB_Project_Key : Jira_Key
-# Pozn: Jira API v3 na této instanci nereaguje na klíče, pouze na numerická ID.
-# SYNC_PROJECT proto zadávej jako numerické ID (např. 10036 místo PRE).
-# Mapování BB_TO_JIRA používá Jira klíče — JIRA_ID_TO_KEY překládá ID → klíč.
-BB_TO_JIRA = {
-    "ABX":    "ABX",
-    "ADT":    "ADT",
-    "NAA":    "NAA",
-    "ASK":    "ASK",
-    "ATE":    "ATE",
-    "BCT":    "BCT",
-    "BIE":    "BIE",
-    "BOH":    "BOH",
-    "FAS":    "FAS",
-    "DRZ":    "DRZ",
-    "ELI":    "ELI",
-    "EMP":    "EMP",
-    "EMT":    "EMT",
-    "CSTRAN": "CSTRAN",
-    "ENA":    "ENA",
-    "FLEX":   "FLEX",
-    "GME":    "GME",
-    "GSB":    "GSB",
-    "IFTKRA": "IFTKRA",
-    "JIP":    "JIP",
-    "KKE":    "KKE",
-    "KAN":    "KAN",
-    "KRK":    "KRK",
-    "LAS":    "LAS",
-    "MAR":    "MAR",
-    "NDE":    "NDE",
-    "NWE":    "NWE",
-    "OKT":    "OKT",
-    "PNM":    "PNM",
-    "PFD":    "PFD",
-    "PIN":    "PIN",
-    "PRE":    "PRE",
-    "SNP":    "SNP",
-    "SUP":    "SUP",
-    "SSWI":   "SSWI",
-    "SYK":    "SYK",
-}
-
 # ── Bitbucket helpers ─────────────────────────────────────────────────────────
 
 def bb_get_token() -> str:
@@ -141,27 +97,41 @@ def bb_get_repos(token: str) -> list:
         {"pagelen": 100},
     )
 
+
+def bb_get_project_keys(token: str) -> set:
+    """Vrátí množinu všech BB projekt klíčů ve workspace."""
+    projects = bb_paginated(
+        f"{BB_API}/workspaces/{BB_WORKSPACE}/projects",
+        token,
+        {"pagelen": 100},
+    )
+    return {p["key"] for p in projects}
+
 # ── Jira helpers ──────────────────────────────────────────────────────────────
 
 def jira_auth() -> HTTPBasicAuth:
     return HTTPBasicAuth(JIRA_EMAIL, JIRA_API_TOKEN)
 
 
-def jira_resolve_projects(keys: list) -> dict:
-    """Přeloží seznam Jira klíčů na {klíč: id} slovník."""
-    result = {}
-    for key in keys:
+def jira_get_all_projects() -> list:
+    """Vrátí všechny Jira projekty (klíč + id)."""
+    results = []
+    start_at = 0
+    max_results = 50
+    while True:
         resp = requests.get(
-            f"{JIRA_API}/project/{key}",
+            f"{JIRA_API}/project/search",
             auth=jira_auth(),
+            params={"startAt": start_at, "maxResults": max_results},
             timeout=30,
         )
-        if resp.ok:
-            data = resp.json()
-            result[data["key"]] = str(data["id"])
-        else:
-            log.error("  Nelze načíst projekt %s: %s", key, resp.text[:200])
-    return result
+        resp.raise_for_status()
+        data = resp.json()
+        results.extend(data.get("values", []))
+        if data.get("isLast", True):
+            break
+        start_at += max_results
+    return results
 
 
 def jira_get_components(project_key: str) -> list:
@@ -185,14 +155,14 @@ def jira_delete_component(component_id: str) -> None:
     resp.raise_for_status()
 
 
-def jira_create_component(project_id: str, slug: str) -> dict:
+def jira_create_component(project_key: str, slug: str) -> dict:
     resp = requests.post(
         f"{JIRA_API}/component",
         auth=jira_auth(),
         json={
             "name":        slug,
             "description": f"{BB_REPO_URL}/{slug}/src",
-            "project":     project_id,
+            "project":     project_key,
         },
         timeout=30,
     )
@@ -201,42 +171,70 @@ def jira_create_component(project_id: str, slug: str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
+# ── Mapování BB ↔ Jira ────────────────────────────────────────────────────────
+
+def build_project_mapping(bb_token: str) -> dict:
+    """
+    Dynamicky sestaví mapování {jira_project_key: jira_project_id}.
+
+    Předpoklad: BB klíč == Jira klíč (např. PRE → PRE).
+    Průnik BB projektů a Jira projektů = projekty k synchronizaci.
+    """
+    log.info("Načítám projekty z Bitbucket...")
+    bb_keys = bb_get_project_keys(bb_token)
+    log.info("  BB projekty (%d): %s", len(bb_keys), sorted(bb_keys))
+
+    log.info("Načítám projekty z Jira...")
+    jira_projects = jira_get_all_projects()
+    jira_key_to_id = {p["key"]: str(p["id"]) for p in jira_projects}
+    log.info("  Jira projekty (%d): %s", len(jira_key_to_id), sorted(jira_key_to_id.keys()))
+
+    # Průnik — klíče existující v obou systémech
+    common_keys = bb_keys & set(jira_key_to_id.keys())
+    only_bb = bb_keys - set(jira_key_to_id.keys())
+    only_jira = set(jira_key_to_id.keys()) - bb_keys
+
+    if only_bb:
+        log.info("  Pouze v BB (přeskakuji): %s", sorted(only_bb))
+    if only_jira:
+        log.debug("  Pouze v Jira (přeskakuji): %s", sorted(only_jira))
+
+    log.info("  Společné projekty k sync (%d): %s", len(common_keys), sorted(common_keys))
+    return {k: jira_key_to_id[k] for k in common_keys}
+
 # ── Hlavní sync logika ────────────────────────────────────────────────────────
 
-def sync_project(jira_key: str, project_id: str, repos: list) -> None:
+def sync_project(jira_key: str, repos: list) -> None:
     """Synchronizuje komponenty pro jeden Jira projekt."""
-    real_jira_key = jira_key  # jira_key je klíč (PRE), project_id je numerické ID
-
     bb_slugs = {
         r["slug"]
         for r in repos
-        if r.get("project", {}).get("key") in
-           {k for k, v in BB_TO_JIRA.items() if v == real_jira_key}
+        if r.get("project", {}).get("key") == jira_key
         and r["slug"] not in BLACKLIST
     }
 
     if not bb_slugs:
-        log.info("  Žádné repozitáře pro tento projekt, přeskakuji.")
+        log.info("  [%s] Žádné repozitáře pro tento projekt, přeskakuji.", jira_key)
         return
 
     # Existující komponenty v Jiře
-    existing = jira_get_components(project_id)
+    existing = jira_get_components(jira_key)
     existing_by_name = {c["name"]: c for c in existing}
     existing_names = set(existing_by_name.keys())
 
-    to_add    = bb_slugs - existing_names       # v BB ale ne v Jiře
-    to_delete = existing_names - bb_slugs       # v Jiře ale ne v BB
-    unchanged = bb_slugs & existing_names       # v obou → nic
+    to_add    = bb_slugs - existing_names
+    to_delete = existing_names - bb_slugs
+    unchanged = bb_slugs & existing_names
 
     log.info("  [%s] repozitářů: %d, přidat: %d, smazat: %d, beze změny: %d",
-             real_jira_key, len(bb_slugs), len(to_add), len(to_delete), len(unchanged))
+             jira_key, len(bb_slugs), len(to_add), len(to_delete), len(unchanged))
 
     for name in sorted(to_delete):
         jira_delete_component(existing_by_name[name]["id"])
         log.info("    ✖ smazána: %s", name)
 
     for slug in sorted(to_add):
-        comp = jira_create_component(real_jira_key, slug)
+        comp = jira_create_component(jira_key, slug)
         log.info("    ✔ vytvořena: %s → %s", comp["name"], comp.get("description", ""))
 
 
@@ -247,25 +245,24 @@ def run_sync() -> None:
     token = bb_get_token()
     repos = bb_get_repos(token)
 
-    # Které Jira projekty synchronizovat
-    if SYNC_PROJECT.lower() == "all":
-        jira_keys = sorted(set(BB_TO_JIRA.values()))
-    else:
-        jira_keys = [k.strip().upper() for k in SYNC_PROJECT.split(",")]
+    # Dynamické mapování BB ↔ Jira
+    project_mapping = build_project_mapping(token)  # {jira_key: jira_id}
 
-    # Načti numerická ID pro všechny klíče (components endpoint potřebuje ID)
-    key_to_id = jira_resolve_projects(jira_keys)
-    missing = [k for k in jira_keys if k not in key_to_id]
-    if missing:
-        log.warning("  Projekty nenalezeny v Jiře: %s", missing)
-    jira_keys = list(key_to_id.keys())
-    log.info("  Synchronizuji %d projektů", len(jira_keys))
+    # Filtrování na konkrétní projekt(y) pokud není "all"
+    if SYNC_PROJECT.lower() != "all":
+        requested = {k.strip().upper() for k in SYNC_PROJECT.split(",")}
+        project_mapping = {k: v for k, v in project_mapping.items() if k in requested}
+        missing = requested - set(project_mapping.keys())
+        if missing:
+            log.warning("  Požadované projekty nenalezeny (chybí v BB nebo Jiře): %s", missing)
+
+    log.info("Synchronizuji %d projektů", len(project_mapping))
 
     ok = 0
     errors = 0
-    for jira_key in sorted(jira_keys):
+    for jira_key in sorted(project_mapping.keys()):
         try:
-            sync_project(jira_key, key_to_id[jira_key], repos)
+            sync_project(jira_key, repos)
             ok += 1
         except Exception as e:
             log.error("  CHYBA při synchronizaci %s: %s", jira_key, e)
