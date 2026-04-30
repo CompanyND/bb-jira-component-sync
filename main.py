@@ -206,11 +206,8 @@ def jira_create_component(project_id: str, slug: str) -> dict:
 
 def sync_project(jira_key: str, repos: list) -> None:
     """Synchronizuje komponenty pro jeden Jira projekt."""
-    log.info("━━━  %s  ━━━", jira_key)
-
     # Přelož ID na Jira klíč pro BB_TO_JIRA lookup
     real_jira_key = JIRA_ID_TO_KEY.get(str(jira_key), jira_key)
-    log.info("  Jira klíč     : %s (ID: %s)", real_jira_key, jira_key)
 
     bb_slugs = {
         r["slug"]
@@ -233,10 +230,8 @@ def sync_project(jira_key: str, repos: list) -> None:
     to_delete = existing_names - bb_slugs       # v Jiře ale ne v BB
     unchanged = bb_slugs & existing_names       # v obou → nic
 
-    log.info("  BB repozitářů : %d", len(bb_slugs))
-    log.info("  Beze změny    : %d", len(unchanged))
-    log.info("  Přidat        : %d", len(to_add))
-    log.info("  Smazat        : %d", len(to_delete))
+    log.info("  [%s] repozitářů: %d, přidat: %d, smazat: %d, beze změny: %d",
+             real_jira_key, len(bb_slugs), len(to_add), len(to_delete), len(unchanged))
 
     for name in sorted(to_delete):
         jira_delete_component(existing_by_name[name]["id"])
@@ -248,18 +243,11 @@ def sync_project(jira_key: str, repos: list) -> None:
 
 
 def run_sync() -> None:
-    log.info("╔══════════════════════════════════════════════╗")
-    log.info("║   Jira ↔ BB Component Sync                  ║")
-    log.info("╚══════════════════════════════════════════════╝")
-    log.info("  SYNC_PROJECT  : %s", SYNC_PROJECT)
-    log.info("  BB_BLACKLIST  : %s", BLACKLIST or "(prázdný)")
-    log.info("  JIRA_EMAIL    : %s", JIRA_EMAIL)
-    log.info("  JIRA_BASE_URL : %s", JIRA_BASE_URL)
+    log.info("Spouštím sync — projekt: %s, interval: %d min", SYNC_PROJECT, SYNC_INTERVAL // 60)
 
     # BB token + repozitáře
     token = bb_get_token()
     repos = bb_get_repos(token)
-    log.info("  BB repozitářů : %d", len(repos))
 
     # Které Jira projekty synchronizovat
     if SYNC_PROJECT.lower() == "all":
@@ -289,9 +277,7 @@ def run_sync() -> None:
                 jira_keys.append(key_to_id[k.upper()])  # přeložen klíč → ID
             else:
                 jira_keys.append(k)          # necháme jak je, zkusíme
-    log.info("  Jira projekt IDs: %s", jira_keys)
-
-    log.info("  Jira projektů : %d\n", len(jira_keys))
+    log.info("  Synchronizuji %d projektů", len(jira_keys))
 
     ok = 0
     errors = 0
@@ -303,7 +289,7 @@ def run_sync() -> None:
             log.error("  CHYBA při synchronizaci %s: %s", jira_key, e)
             errors += 1
 
-    log.info("\n  Hotovo — OK: %d, Chyby: %d", ok, errors)
+    log.info("Sync dokončen — OK: %d, Chyby: %d", ok, errors)
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
@@ -314,5 +300,5 @@ if __name__ == "__main__":
             run_sync()
         except Exception as e:
             log.error("Kritická chyba: %s", e)
-        log.info("Čekám %d minut do dalšího běhu...\n", SYNC_INTERVAL // 60)
+        log.info("Další běh za %d minut", SYNC_INTERVAL // 60)
         time.sleep(SYNC_INTERVAL)
