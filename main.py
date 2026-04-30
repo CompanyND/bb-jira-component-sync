@@ -193,7 +193,7 @@ def jira_create_component(project_id: str, slug: str) -> dict:
         json={
             "name":        slug,
             "description": f"{BB_REPO_URL}/{slug}/src",
-            "projectId":   project_id,
+            "projectId":   int(project_id),
         },
         timeout=30,
     )
