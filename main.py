@@ -186,17 +186,19 @@ def jira_delete_component(component_id: str) -> None:
     resp.raise_for_status()
 
 
-def jira_create_component(project_key: str, slug: str) -> dict:
+def jira_create_component(project_id: str, slug: str) -> dict:
     resp = requests.post(
         f"{JIRA_API}/component",
         auth=jira_auth(),
         json={
             "name":        slug,
             "description": f"{BB_REPO_URL}/{slug}/src",
-            "project":     project_key,
+            "projectId":   project_id,
         },
         timeout=30,
     )
+    if not resp.ok:
+        log.error("  Jira POST component → %d: %s", resp.status_code, resp.text[:300])
     resp.raise_for_status()
     return resp.json()
 
