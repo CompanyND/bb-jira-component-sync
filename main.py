@@ -1,7 +1,8 @@
 """
-Jira ↔ Bitbucket Component Sync
-================================
-Synchronizuje BB repozitáře jako komponenty do Jira projektů.
+Jira ↔ Bitbucket Component Sync + Webhook Sync
+================================================
+Synchronizuje BB repozitáře jako komponenty do Jira projektů
+a zajišťuje přítomnost Claude Code Review webhooku ve všech repozitářích.
 
 Railway Variables:
     # Bitbucket
@@ -19,6 +20,10 @@ Railway Variables:
     SYNC_INTERVAL_MIN   interval spouštění v minutách (default: 60)
     BB_BLACKLIST        čárkou oddělené repo slugy které se přeskočí
                         např. "pre-e2e-tests,nde-e2e-tests,nde-test-agent"
+
+    # Webhook sync (volitelné)
+    WEBHOOK_URL         URL webhooku (default: Claude CR na Railway)
+    WEBHOOK_SYNC        "true" zapne sync webhooků (default: true)
 """
 
 import os
@@ -49,6 +54,14 @@ JIRA_API         = f"{JIRA_BASE_URL}/rest/api/3"
 
 SYNC_PROJECT     = os.environ.get("SYNC_PROJECT", "all").strip()
 SYNC_INTERVAL    = int(os.environ.get("SYNC_INTERVAL_MIN", "60")) * 60
+
+WEBHOOK_URL      = os.environ.get(
+    "WEBHOOK_URL",
+    "https://agent-code-review-production.up.railway.app/webhook/bitbucket",
+)
+WEBHOOK_SYNC     = os.environ.get("WEBHOOK_SYNC", "true").lower() == "true"
+WEBHOOK_EVENTS   = ["pullrequest:created", "pullrequest:updated"]
+WEBHOOK_DESC     = "Claude Code Review"
 
 BLACKLIST = {
     s.strip()
@@ -106,6 +119,63 @@ def bb_get_project_keys(token: str) -> set:
         {"pagelen": 100},
     )
     return {p["key"] for p in projects}
+
+# ── Webhook helpers ───────────────────────────────────────────────────────────
+
+def bb_ensure_webhook(token: str, slug: str) -> None:
+    """
+    Zkontroluje zda Claude CR webhook existuje v repozitáři.
+    Pokud ne, přidá ho. Pokud ano, nic nedělá.
+    """
+    hooks_url = f"{BB_API}/repositories/{BB_WORKSPACE}/{slug}/hooks"
+
+    existing = bb_paginated(hooks_url, token, {"pagelen": 100})
+    if any(h.get("url") == WEBHOOK_URL for h in existing):
+        log.debug("    webhook již existuje: %s", slug)
+        return
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    resp = requests.post(
+        hooks_url,
+        headers=headers,
+        json={
+            "description": WEBHOOK_DESC,
+            "url":         WEBHOOK_URL,
+            "active":      True,
+            "events":      WEBHOOK_EVENTS,
+        },
+        timeout=30,
+    )
+    if not resp.ok:
+        log.error("  Webhook POST %s → %d: %s", slug, resp.status_code, resp.text[:300])
+        resp.raise_for_status()
+
+    log.info("    🔗 webhook přidán: %s", slug)
+
+
+def sync_webhooks(token: str, repos: list) -> None:
+    """Projde všechny repozitáře mimo blacklist a zajistí přítomnost webhooku."""
+    log.info("Synchronizuji webhooky (celkem repozitářů: %d)...", len(repos))
+
+    added   = 0
+    skipped = 0
+    errors  = 0
+
+    for repo in repos:
+        slug = repo["slug"]
+        if slug in BLACKLIST:
+            log.debug("  SKIP (blacklist): %s", slug)
+            skipped += 1
+            continue
+        try:
+            before_count = added  # sledujeme zda došlo k přidání
+            bb_ensure_webhook(token, slug)
+            # bb_ensure_webhook loguje pouze přidání; odlišíme pomocí logu
+        except Exception as e:
+            log.error("  CHYBA webhook %s: %s", slug, e)
+            errors += 1
+
+    log.info("Webhooky dokončeny — přeskočeno (blacklist): %d, chyby: %d", skipped, errors)
 
 # ── Jira helpers ──────────────────────────────────────────────────────────────
 
@@ -241,9 +311,22 @@ def sync_project(jira_key: str, repos: list) -> None:
 def run_sync() -> None:
     log.info("Spouštím sync — projekt: %s, interval: %d min", SYNC_PROJECT, SYNC_INTERVAL // 60)
 
-    # BB token + repozitáře
+    # BB token + repozitáře (sdílené pro obě části syncu)
     token = bb_get_token()
     repos = bb_get_repos(token)
+
+    # ── 1. Webhook sync ───────────────────────────────────────────────────────
+    if WEBHOOK_SYNC:
+        log.info("── Webhook sync ──────────────────────────────────────────")
+        try:
+            sync_webhooks(token, repos)
+        except Exception as e:
+            log.error("Kritická chyba při webhook syncu: %s", e)
+    else:
+        log.info("Webhook sync je vypnutý (WEBHOOK_SYNC != true)")
+
+    # ── 2. Jira component sync ────────────────────────────────────────────────
+    log.info("── Jira component sync ───────────────────────────────────")
 
     # Dynamické mapování BB ↔ Jira
     project_mapping = build_project_mapping(token)  # {jira_key: jira_id}
