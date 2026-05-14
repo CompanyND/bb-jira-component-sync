@@ -64,7 +64,7 @@ WEBHOOKS = [
         "events": ["pullrequest:created", "pullrequest:updated"],
     },
     {
-        "url":    "https://agent-byte-production.up.railway.app/webhook/bb?token=b0BZ1Eb*F@oLjxNC",  # <-- doplň svoji URL
+        "url":    "https://agent-byte-production.up.railway.app/webhook/bb?token=IEzdKbRzthH8oxPFWLDsqqTne3NnWjwkuxxkmku/44U=",  # <-- doplň svoji URL
         "desc":   "Byte PR Learning",
         "events": ["pullrequest:fulfilled"],
     },
@@ -137,14 +137,27 @@ def bb_ensure_webhook(token: str, slug: str) -> None:
     hooks_url = f"{BB_API}/repositories/{BB_WORKSPACE}/{slug}/hooks"
 
     existing = bb_paginated(hooks_url, token, {"pagelen": 100})
-    existing_urls = {h.get("url") for h in existing}
+    existing_by_desc = {h.get("description"): h for h in existing}
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     for wh in WEBHOOKS:
-        if wh["url"] in existing_urls:
-            log.debug("    webhook již existuje: %s (%s)", slug, wh["desc"])
-            continue
+        existing_hook = existing_by_desc.get(wh["desc"])
+
+        if existing_hook:
+            if existing_hook.get("url") == wh["url"]:
+                log.debug("    webhook již existuje: %s (%s)", slug, wh["desc"])
+                continue
+            # URL se změnila — smaž starý
+            del_resp = requests.delete(
+                f"{hooks_url}/{existing_hook['uuid']}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+            if not del_resp.ok:
+                log.error("  Webhook DELETE %s (%s) → %d: %s", slug, wh["desc"], del_resp.status_code, del_resp.text[:300])
+                del_resp.raise_for_status()
+            log.info("    🗑 webhook smazán (stará URL): %s (%s)", slug, wh["desc"])
 
         resp = requests.post(
             hooks_url,
