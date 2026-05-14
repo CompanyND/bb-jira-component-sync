@@ -62,12 +62,12 @@ WEBHOOKS = [
         "url":    "https://agent-code-review-production.up.railway.app/webhook/bitbucket",
         "desc":   "Claude Code Review",
         "events": ["pullrequest:created", "pullrequest:updated"],
-    },
-    {
-        "url":    "https://agent-byte-production.up.railway.app/webhook/bb?token=IEzdKbRzthH8oxPFWLDsqqTne3NnWjwkuxxkmku/44U=",  # <-- doplň svoji URL
-        "desc":   "Byte PR Learning",
-        "events": ["pullrequest:fulfilled"],
-    },
+    }#,
+    #{
+    #    "url":    "https://agent-byte-production.up.railway.app/webhook/bb?token=IEzdKbRzthH8oxPFWLDsqqTne3NnWjwkuxxkmku/44U=",  # <-- doplň svoji URL
+    #    "desc":   "Byte PR Learning",
+    #    "events": ["pullrequest:fulfilled"],
+    #},
 ]
 
 BLACKLIST = {
