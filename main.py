@@ -132,7 +132,7 @@ def bb_get_project_keys(token: str) -> set:
 def bb_ensure_webhook(token: str, slug: str) -> None:
     """
     Zkontroluje zda každý webhook ze seznamu WEBHOOKS existuje v repozitáři.
-    Pokud ne, přidá ho. Pokud ano, nic nedělá.
+    Pokud ne, přidá ho. Webhooky z WEBHOOKS_TO_REMOVE smaže pokud existují.
     """
     hooks_url = f"{BB_API}/repositories/{BB_WORKSPACE}/{slug}/hooks"
 
@@ -141,6 +141,22 @@ def bb_ensure_webhook(token: str, slug: str) -> None:
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
+    # Odstraň deprecated webhooky
+    for desc in WEBHOOKS_TO_REMOVE:
+        hook = existing_by_desc.get(desc)
+        if not hook:
+            continue
+        del_resp = requests.delete(
+            f"{hooks_url}/{hook['uuid']}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        if not del_resp.ok:
+            log.error("  Webhook DELETE %s (%s) → %d: %s", slug, desc, del_resp.status_code, del_resp.text[:300])
+        else:
+            log.info("    webhook odstraněn: %s (%s)", slug, desc)
+
+    # Zajisti přítomnost aktivních webhooků
     for wh in WEBHOOKS:
         existing_hook = existing_by_desc.get(wh["desc"])
 
@@ -157,7 +173,7 @@ def bb_ensure_webhook(token: str, slug: str) -> None:
             if not del_resp.ok:
                 log.error("  Webhook DELETE %s (%s) → %d: %s", slug, wh["desc"], del_resp.status_code, del_resp.text[:300])
                 del_resp.raise_for_status()
-            log.info("    🗑 webhook smazán (stará URL): %s (%s)", slug, wh["desc"])
+            log.info("    webhook smazán (stará URL): %s (%s)", slug, wh["desc"])
 
         resp = requests.post(
             hooks_url,
@@ -174,7 +190,7 @@ def bb_ensure_webhook(token: str, slug: str) -> None:
             log.error("  Webhook POST %s → %d: %s", slug, resp.status_code, resp.text[:300])
             resp.raise_for_status()
 
-        log.info("    🔗 webhook přidán: %s (%s)", slug, wh["desc"])
+        log.info("    webhook přidán: %s (%s)", slug, wh["desc"])
 
 
 def sync_webhooks(token: str, repos: list) -> None:
